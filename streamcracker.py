@@ -1,7 +1,7 @@
 import streamlit as st
 import plotly.graph_objects as go
-import pandas as pd
 import plotly.express as px
+import pandas as pd
 
 # ------------------- SETTINGS -------------------
 st.set_page_config(page_title="Steam Cracker Allocation Methods", layout="wide")
@@ -12,198 +12,160 @@ view = st.sidebar.selectbox("Select View:", (
     "Mass Balance",
     "Allocation to HVC only",
     "Allocation to all",
-    "Overview Comparison"
+    "Overview Comparison",
 ))
 
-# Product mass and emissions
-# ------------------- USER INPUTS -------------------
-st.sidebar.header("Product Mass Inputs (t)")
-ethylene = st.sidebar.number_input("Ethylene (HVC)", value=500, min_value=0)
-propylene = st.sidebar.number_input("Propylene (HVC)", value=300, min_value=0)
-fuel = st.sidebar.number_input("Fuel (non-HVC)", value=200, min_value=0)
-total_mass = ethylene + propylene + fuel
+# ------------------- USER INPUT -------------------
+st.sidebar.header("Product Mass Input (in tons)")
+ethylene = st.sidebar.number_input("Ethylene (HVC)", min_value=0.0, value=342.2)
+propylene = st.sidebar.number_input("Propylene (HVC)", min_value=0.0, value=156.7)
+butadiene = st.sidebar.number_input("Butadiene (HVC)", min_value=0.0, value=46.6)
+others = st.sidebar.number_input("Others (HVC)", min_value=0.0, value=202.1)
+fuel = st.sidebar.number_input("Fuel (non-HVC)", min_value=0.0, value=74.2)
 
-
-emission_naphtha = 2.0  # t CO2
-emission_energy = 1.0   # t CO2
-
-# Sidebar: colors
-st.sidebar.markdown("**Color Settings**")
-color_eth = st.sidebar.color_picker("Ethylene (HVC)", "#FF6B6B")
-color_pro = st.sidebar.color_picker("Propylene (HVC)", "#C44D58")
-color_fuel = st.sidebar.color_picker("Fuel (non-HVC)", "#666666")
+st.sidebar.header("Flow Color Settings")
+color_eth = st.sidebar.color_picker("Ethylene Flow (HVC)", "#FF6B6B")
+color_pro = st.sidebar.color_picker("Propylene Flow (HVC)", "#C44D58")
+color_but = st.sidebar.color_picker("Butadiene Flow (HVC)", "#D46A6A")
+color_oth = st.sidebar.color_picker("Others Flow (HVC)", "#FFA07A")
+color_fuel = st.sidebar.color_picker("Fuel Flow (non-HVC)", "#222222")
+color_feedstock = st.sidebar.color_picker("Feedstock Input", "#FFA500")
 color_energy = st.sidebar.color_picker("Energy Input", "#FFD700")
-color_naphtha = st.sidebar.color_picker("Naphtha", "#FFA500")
 
+# ------------------- PRODUCT INFO -------------------
+products = {
+    "Ethylene (HVC)": {"mass": ethylene, "flow_color": color_eth},
+    "Propylene (HVC)": {"mass": propylene, "flow_color": color_pro},
+    "Butadiene (HVC)": {"mass": butadiene, "flow_color": color_but},
+    "Others (HVC)": {"mass": others, "flow_color": color_oth},
+    "Fuel (non-HVC)": {"mass": fuel, "flow_color": color_fuel}
+}
 
-# ------------------ Shared Helpers ------------------
-def format_table(naphtha_list, energy_list):
-    total = [n + e for n, e in zip(naphtha_list, energy_list)]
-    df = pd.DataFrame({
-        "Product": ["Ethylene (HVC)", "Propylene (HVC)", "Fuel (non-HVC)"],
-        "Mass (t)": [ethylene, propylene, fuel],
-        "Emission from Naphtha (t CO₂)": naphtha_list,
-        "Emission from Energy (t CO₂)": energy_list,
-        "Total Emission (t CO₂)": total
-    })
-    total_row = pd.DataFrame({
-        "Product": ["Total"],
-        "Mass (t)": [total_mass],
-        "Emission from Naphtha (t CO₂)": [sum(naphtha_list)],
-        "Emission from Energy (t CO₂)": [sum(energy_list)],
-        "Total Emission (t CO₂)": [sum(total)]
-    })
-    return pd.concat([df, total_row], ignore_index=True)
+# Normalize mass
+feedstock_mass = 1000.0
+original_total = sum(p["mass"] for p in products.values())
+scale = feedstock_mass / original_total if original_total > 0 else 0
+for p in products.values():
+    p["mass"] *= scale
 
-def draw_mass_sankey():
-    labels = ["Naphtha", "Energy Input (10 GJ)", "Steam Cracking", "Ethylene (HVC)", "Propylene (HVC)", "Fuel (non-HVC)"]
-    source = [0, 1, 2, 2, 2]
-    target = [2, 2, 3, 4, 5]
-    values = [1000, 10, ethylene, propylene, fuel]
-    node_colors = [color_naphtha, color_energy, "#EF553B", color_eth, color_pro, color_fuel]
-    link_colors = [color_energy, color_energy, color_eth, color_pro, color_fuel]
+# Emissions
+emission_feedstock = 2.0
+emission_energy = 1.0
 
-    fig = go.Figure(go.Sankey(
-        node=dict(pad=20, thickness=30, label=labels, color=node_colors, line=dict(color="gray")),
-        link=dict(source=source, target=target, value=values, color=link_colors)
-    ))
-    fig.update_layout(title_text="Material & Energy Flow", font=dict(size=14))
-    return fig
+# Allocation calculations
+total_mass = sum(p["mass"] for p in products.values())
+total_hvc = sum(p["mass"] for k, p in products.items() if "non-HVC" not in k)
+for k, v in products.items():
+    is_hvc = "non-HVC" not in k
+    if is_hvc:
+        v["feedstock_alloc_hvc"] = emission_feedstock * v["mass"] / total_hvc
+        v["energy_alloc_hvc"] = emission_energy * v["mass"] / total_hvc
+    else:
+        v["feedstock_alloc_hvc"] = emission_feedstock * v["mass"] / total_mass
+        v["energy_alloc_hvc"] = 0.0
+    v["feedstock_alloc_all"] = emission_feedstock * v["mass"] / total_mass
+    v["energy_alloc_all"] = emission_energy * v["mass"] / total_mass
 
-def draw_co2_sankey(naphtha_alloc, energy_alloc):
-    labels = ["Naphtha Emission (2t)", "Energy Emission (1t)", "Ethylene (HVC)", "Propylene (HVC)", "Fuel (non-HVC)"]
-    source = [0, 0, 0, 1, 1, 1]
-    target = [2, 3, 4, 2, 3, 4]
-    values = [naphtha_alloc[0], naphtha_alloc[1], naphtha_alloc[2],
-              energy_alloc[0], energy_alloc[1], energy_alloc[2]]
-    colors = [color_eth, color_pro, color_fuel, color_eth, color_pro, color_fuel]
+# DataFrames for charts
+df_allocation = pd.DataFrame([
+    {
+        "Product": k,
+        "Mass": v["mass"],
+        "Emission_HVC": v["feedstock_alloc_hvc"] + v["energy_alloc_hvc"],
+        "Emission_All": v["feedstock_alloc_all"] + v["energy_alloc_all"],
+        "Feedstock": v["feedstock_alloc_all"],
+        "Energy": v["energy_alloc_all"],
+        "Error": abs((v["feedstock_alloc_all"] + v["energy_alloc_all"]) - (v["feedstock_alloc_hvc"] + v["energy_alloc_hvc"]))
+    }
+    for k, v in products.items()
+])
 
-    fig = go.Figure(go.Sankey(
-        node=dict(pad=20, thickness=30, label=labels,
-                  color=[color_naphtha, color_energy, color_eth, color_pro, color_fuel],
-                  line=dict(color="gray")),
-        link=dict(source=source, target=target, value=values, color=colors)
-    ))
-    fig.update_layout(title_text="CO₂ Allocation Flow", font=dict(size=14))
-    return fig
-
-# ------------------ PAGE: MASS BALANCE ------------------
+# ------------------- VIEWS -------------------
 if view == "Mass Balance":
     st.header("Mass Balance View")
-    st.markdown("Mass and energy input/output without CO₂ allocation.")
-    st.plotly_chart(draw_mass_sankey(), use_container_width=True)
+    st.markdown("📝 **Note**: Feedstock mass (1000 t) excludes heat integration losses and represents net usable input.")
+    labels = ["Feedstock", "Energy Input", "Steam Cracking"] + list(products.keys())
+    source = [0, 1] + [2]*len(products)
+    target = [2, 2] + list(range(3, 3+len(products)))
+    values = [feedstock_mass, 10] + [v["mass"] for v in products.values()]
+    link_colors = [color_feedstock, color_energy] + [v["flow_color"] for v in products.values()]
+    node_colors = ["#AAAAAA"] * len(labels)
+
+    fig = go.Figure(go.Sankey(
+        node=dict(label=labels, color=node_colors),
+        link=dict(source=source, target=target, value=values, color=link_colors)
+    ))
+    st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Input Table")
-    df_input = pd.DataFrame({
-        "Input": ["Naphtha", "Energy"],
+    st.dataframe(pd.DataFrame({
+        "Input": ["Feedstock", "Energy"],
         "Amount": ["1000 t", "10 GJ"],
-        "Carbon Emission (t CO₂)": [emission_naphtha, emission_energy]
-    })
-    st.dataframe(df_input)
+        "CO₂ Emissions": [emission_feedstock, emission_energy]
+    }))
 
     st.subheader("Output Table")
-    df_output = pd.DataFrame({
-        "Product": ["Ethylene (HVC)", "Propylene (HVC)", "Fuel (non-HVC)"],
-        "Mass (t)": [ethylene, propylene, fuel]
-    })
-    st.dataframe(df_output)
+    st.dataframe(df_allocation[["Product", "Mass"]])
 
-# ------------------ PAGE: ALLOCATION TO HVC ONLY ------------------
-elif view == "Allocation to HVC only":
-    st.header("CO₂ Allocation: HVC Only")
+elif view in ["Allocation to HVC only", "Allocation to all"]:
+    st.header(f"CO₂ Allocation: {view}")
+    mode = "hvc" if view.endswith("HVC only") else "all"
+    df = pd.DataFrame([
+        {
+            "Product": k,
+            "Mass": v["mass"],
+            "Feedstock": v[f"feedstock_alloc_{mode}"],
+            "Energy": v[f"energy_alloc_{mode}"],
+            "Total Emission": v[f"feedstock_alloc_{mode}"] + v[f"energy_alloc_{mode}"]
+        }
+        for k, v in products.items()
+    ])
+    st.dataframe(df)
 
-    naphtha_alloc = [1.0, 0.6, 0.4]
-    total_hvc = ethylene + propylene
-    energy_alloc = [
-        emission_energy * ethylene / total_hvc,
-        emission_energy * propylene / total_hvc,
-        0.0
-    ]
+    labels = ["Feedstock Emission", "Energy Emission"] + list(products.keys())
+    source = []
+    target = []
+    value = []
+    color = []
 
-    df = format_table(naphtha_alloc, energy_alloc)
-    st.dataframe(df.style.format({
-        "Mass (t)": "{:.0f}",
-        "Emission from Naphtha (t CO₂)": "{:.2f}",
-        "Emission from Energy (t CO₂)": "{:.3f}",
-        "Total Emission (t CO₂)": "{:.3f}"
-    }))
-    st.plotly_chart(draw_co2_sankey(naphtha_alloc, energy_alloc), use_container_width=True)
+    for i, (k, v) in enumerate(products.items()):
+        idx = i + 2
+        f = v[f"feedstock_alloc_{mode}"]
+        e = v[f"energy_alloc_{mode}"]
+        if f > 0:
+            source.append(0); target.append(idx); value.append(f); color.append(v["flow_color"])
+        if e > 0:
+            source.append(1); target.append(idx); value.append(e); color.append(v["flow_color"])
 
-# ------------------ PAGE: ALLOCATION TO ALL ------------------
-elif view == "Allocation to all":
-    st.header("CO₂ Allocation: To All Products (Mass-based)")
-
-    naphtha_alloc = [
-        emission_naphtha * ethylene / total_mass,
-        emission_naphtha * propylene / total_mass,
-        emission_naphtha * fuel / total_mass
-    ]
-    energy_alloc = [
-        emission_energy * ethylene / total_mass,
-        emission_energy * propylene / total_mass,
-        emission_energy * fuel / total_mass
-    ]
-
-    df = format_table(naphtha_alloc, energy_alloc)
-    st.dataframe(df.style.format({
-        "Mass (t)": "{:.0f}",
-        "Emission from Naphtha (t CO₂)": "{:.2f}",
-        "Emission from Energy (t CO₂)": "{:.3f}",
-        "Total Emission (t CO₂)": "{:.3f}"
-    }))
-    st.plotly_chart(draw_co2_sankey(naphtha_alloc, energy_alloc), use_container_width=True)
-
-# ------------------ PAGE: OVERVIEW COMPARISON ------------------
-elif view == "Overview Comparison":
-    st.header("Overview: Comparison of Product PCFs")
-
-    hvc_naphtha = [1.0, 0.6, 0.4]
-    hvc_energy = [emission_energy * ethylene / 800, emission_energy * propylene / 800, 0.0]
-    all_naphtha = [emission_naphtha * x / total_mass for x in [ethylene, propylene, fuel]]
-    all_energy = [emission_energy * x / total_mass for x in [ethylene, propylene, fuel]]
-
-    df_comp = pd.DataFrame({
-        "Product": ["Ethylene", "Propylene", "Fuel"] * 2,
-        "Allocation": ["HVC Only"] * 3 + ["To All"] * 3,
-        "Total Emissions (t CO₂)": [hvc_naphtha[i]+hvc_energy[i] for i in range(3)] +
-                                   [all_naphtha[i]+all_energy[i] for i in range(3)]
-    })
-
-    fig = px.bar(
-        df_comp,
-        x="Product",
-        y="Total Emissions (t CO₂)",
-        color="Allocation",
-        barmode="group",
-        text_auto=True,
-        color_discrete_map={
-            "HVC Only": "#FF6B6B",
-            "To All": "#222222"
-        },
-        title="Comparison of Product Carbon Footprints (PCF) by Allocation Method"
-    )
-    fig.update_traces(marker_line_width=1.5, marker_line_color="black")
-    fig.update_layout(font=dict(size=14), title_font_size=18)
-
-    # ✅ Burden 계산 및 annotation
-    burdens = [
-        (hvc_naphtha[i] + hvc_energy[i]) - (all_naphtha[i] + all_energy[i])
-        for i in range(3)
-    ]
-    products = ["Ethylene", "Propylene", "Fuel"]
-
-    for i, burden in enumerate(burdens):
-        if abs(burden) > 0.001:
-            fig.add_annotation(
-                x=products[i],
-                y=max(hvc_naphtha[i] + hvc_energy[i], all_naphtha[i] + all_energy[i]),
-                text=(
-                    f"⬇ Reduced burden: {burden:.3f} t CO₂" if burden > 0 else
-                    f"⬆ Gained burden: {abs(burden):.3f} t CO₂"
-                ),
-                showarrow=False,
-                font=dict(color="gray", size=12),
-                yshift=20
-            )
-
+    node_colors = ["#AAAAAA"] * len(labels)
+    fig = go.Figure(go.Sankey(
+        node=dict(label=labels, color=node_colors),
+        link=dict(source=source, target=target, value=value, color=color)
+    ))
     st.plotly_chart(fig, use_container_width=True)
+
+# ------------------- OVERVIEW COMPARISON -------------------
+elif view == "Overview Comparison":
+    st.header("Overview Comparison")
+    df_bar = df_allocation.copy()
+    df_bar["Burden"] = df_bar["Emission_All"] - df_bar["Emission_HVC"]  # <-- 수정된 부분
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df_bar["Product"], y=df_bar["Emission_HVC"],
+                         name="Allocation to HVC", marker_color="#FF6B6B"))
+    fig.add_trace(go.Bar(x=df_bar["Product"], y=df_bar["Emission_All"],
+                         name="Allocation to All", marker_color="#444444"))
+
+    for i, row in df_bar.iterrows():
+        burden = row["Burden"]
+        annotation = "⬆ Gained burden" if burden > 0 else "⬇ Reduced burden"
+        fig.add_annotation(x=row["Product"], y=max(row["Emission_HVC"], row["Emission_All"]),
+                           text=f"{annotation}: {abs(burden):.3f} kg CO₂-eq/kg",
+                           showarrow=False, yshift=20, font=dict(size=12, color="gray"))
+
+    fig.update_layout(title="Allocation Burden Comparison",
+                      barmode="group",
+                      yaxis_title="kg CO₂-eq/kg product",
+                      legend_title="Allocation Method")
+    st.plotly_chart(fig, use_container_width=True)
+
